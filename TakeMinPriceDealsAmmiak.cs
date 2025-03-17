@@ -130,7 +130,7 @@ class Program
                 }
 
                 // Выводим результат
-                Console.WriteLine($"Сейчас {itemName} на ауке минимум за {formattedMinPrice}, недавно его продавали за  {formattedPrice}, если учесть {prices.Count} сделок. Последняя продажа была {newestDeal:dd.MM.yyyy HH:mm:ss}. {comandToMen}");
+                Console.WriteLine($"Сейчас {itemName} на ауке минимум за {formattedMinPrice}, недавно его продавали за  {formattedPrice}, если учесть {prices.Count} сделок {percentile * 100}%. Последняя продажа была {newestDeal:dd.MM.yyyy HH:mm:ss}. {comandToMen}");
             }
         }
     }
