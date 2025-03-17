@@ -12,7 +12,7 @@ class Program
     {
         var driverPath = @"C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser";
         var options = new ChromeOptions();
-        // options.AddArgument("--headless"); // Без графического интерфейса
+        options.AddArgument("--headless"); // Без графического интерфейса
         var driver = new ChromeDriver(driverPath, options);
 
         try
@@ -37,7 +37,6 @@ class Program
             driver.Quit();
         }
     }
-
     static void Percentile(string itemUrl, float percentile)
     {
         string databasePath = "AuctionData.db";
@@ -45,12 +44,38 @@ class Program
         {
             connection.Open();
 
+            // Получаем название предмета и минимальную цену из таблицы Items
+            string itemName = "";
+            float minPrice = 0;
+            string itemQuery = @"
+                SELECT Name, MinPrice
+                FROM Items
+                WHERE Url = @ItemUrl;";
+            using (var itemCommand = new SQLiteCommand(itemQuery, connection))
+            {
+                itemCommand.Parameters.AddWithValue("@ItemUrl", itemUrl);
+                using (var reader = itemCommand.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        itemName = reader.GetString(0);
+                        minPrice = reader.GetFloat(1);
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(itemName))
+            {
+                Console.WriteLine("Предмет не найден в таблице Items.");
+                return;
+            }
+
             // Выбираем данные за последние сутки для конкретного предмета
             string query = @"
-                SELECT Price / Quantity AS PricePerItem
+                SELECT Price / Quantity AS PricePerItem, DealDateTime
                 FROM Deals
                 WHERE ItemUrl = @ItemUrl
-                  AND DealDateTime >= datetime('now', '-1 day')
+                AND DealDateTime >= datetime('now', '-1 day')
                 ORDER BY PricePerItem ASC;";
 
             using (var command = new SQLiteCommand(query, connection))
@@ -58,12 +83,23 @@ class Program
                 command.Parameters.AddWithValue("@ItemUrl", itemUrl);
 
                 var prices = new List<float>();
+                DateTime oldestDeal = DateTime.MaxValue;
+                DateTime newestDeal = DateTime.MinValue;
+
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
                         float pricePerItem = reader.GetFloat(0);
+                        DateTime dealDateTime = reader.GetDateTime(1);
+
                         prices.Add(pricePerItem);
+
+                        // Обновляем временной диапазон
+                        if (dealDateTime < oldestDeal)
+                            oldestDeal = dealDateTime;
+                        if (dealDateTime > newestDeal)
+                            newestDeal = dealDateTime;
                     }
                 }
 
@@ -78,9 +114,43 @@ class Program
                 index = Math.Max(0, Math.Min(index, prices.Count - 1)); // Ограничиваем индекс
 
                 float percentileValue = prices[index];
-                Console.WriteLine($"Процентиль {percentile * 100}% для {itemUrl}: {percentileValue}");
+                string comandToMen = "";
+
+                // Форматируем цену
+                string formattedPrice = FormatPrice(percentileValue);
+                string formattedMinPrice = FormatPrice(minPrice);
+
+                if (minPrice < percentileValue)
+                {
+                    comandToMen = "А ты еще все здесь сидишь!!!";
+                }
+                else
+                {
+                    comandToMen = "Так что все спокойно.";
+                }
+
+                // Выводим результат
+                Console.WriteLine($"Сейчас {itemName} на ауке минимум за {formattedMinPrice}, недавно его продавали за  {formattedPrice}, если учесть {prices.Count} сделок. Последняя продажа была {newestDeal:dd.MM.yyyy HH:mm:ss}. {comandToMen}");
             }
         }
+    }
+
+    static string FormatPrice(float price)
+    {
+        // Разделяем целую и дробную части
+        string[] parts = price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture).Split('.');
+
+        string integerPart = parts[0]; // Целая часть
+        string fractionalPart = parts.Length > 1 ? parts[1] : "00"; // Дробная часть
+
+        // Добавляем пробелы каждые три цифры в целой части
+        for (int i = integerPart.Length - 3; i > 0; i -= 3)
+        {
+            integerPart = integerPart.Insert(i, " ");
+        }
+
+        // Собираем итоговую строку
+        return $"{integerPart}.{fractionalPart} ₽";
     }
 
     static float CatchPrice(IWebDriver driver, WebDriverWait wait)
