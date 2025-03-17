@@ -17,7 +17,7 @@ class Program
         try
         {
             driver.Navigate().GoToUrl("https://stalcraft-monitor.ru/auction?item=40vn");
-            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(20));
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
 
             decimal minPrice = CatchPrice(driver, wait);
             var deals = ParseDeals(driver, wait);
@@ -57,7 +57,8 @@ class Program
         {
             return price;
         }
-        throw new FormatException("Не удалось преобразовать цену в число. Текст: " + priceText);
+        Console.WriteLine("Не удалось преобразовать цену в число. Текст: " + priceText);
+        return 0;
     }
 
     static List<(DateTime DealDateTime, decimal Price)> ParseDeals(IWebDriver driver, WebDriverWait wait)
@@ -79,32 +80,108 @@ class Program
 
         var rows = driver.FindElements(By.CssSelector("#contentHistoryLoots tr"));
         var deals = new List<(DateTime DealDateTime, decimal Price)>();
+        Console.WriteLine("Найдено строк: " + rows.Count);
 
         foreach (var row in rows)
         {
+            Console.WriteLine("HTML строки: " + row.GetAttribute("outerHTML"));
             var cells = row.FindElements(By.TagName("td"));
+            Console.WriteLine("Количество ячеек в строке: " + cells.Count);
             if (cells.Count >= 2)
             {
-                string dateTimeText = cells[0].Text;
-                string priceText = cells[1].Text;
+                string dateTimeText = cells[0].GetAttribute("innerText");
+                string priceText = cells[1].GetAttribute("innerText");
 
-                Console.WriteLine("cells[0].Text: " + cells[0].Text);
-                Console.WriteLine("cells[1].Text: " + cells[1].Text);
+                Console.WriteLine("cells[0].GetAttribute("innerText"): " + cells[0].GetAttribute("innerText"));
+                Console.WriteLine("cells[1].GetAttribute("innerText"): " + cells[1].GetAttribute("innerText"));
+                
+                decimal price = ExtractPrice(priceText);
 
                 if (DateTime.TryParse(dateTimeText, out DateTime dealDateTime))
                 {
-                    decimal price = ExtractPrice(priceText);
-                    deals.Add((dealDateTime, price));
                     Console.WriteLine("Найдена сделка с датой: " + dealDateTime);
                 }
                 else
                 {
+                    dealDateTime = new DateTime(1970, 1, 1);
                     Console.WriteLine("Не удалось распознать дату: " + dateTimeText);
                 }
+                deals.Add((dealDateTime, price));
             }
         }
 
         return deals;
     }
 
+    static void SaveDataToDatabase(decimal minPrice, List<(DateTime DealDateTime, decimal Price)> deals)
+    {
+        string databasePath = "AuctionData.db";
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            // Создание таблицы Deals, если она не существует
+            string createDealsTableQuery = @"
+                CREATE TABLE IF NOT EXISTS Deals (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ItemUrl TEXT NOT NULL,
+                    DealDateTime DATETIME NOT NULL,
+                    Quantity INTEGER NOT NULL,
+                    Price REAL NOT NULL,
+                    EnchantLevel INTEGER NOT NULL,
+                    RowColor TEXT NOT NULL
+                );";
+            using (var command = new SQLiteCommand(createDealsTableQuery, connection))
+            {
+                command.ExecuteNonQuery();
+            }
+
+            double liquidity = CalculateLiquidity(deals);
+            DateTime lastUpdated = DateTime.Now;
+
+            // Обновление таблицы Items
+            string updateItemQuery = @"
+                UPDATE Items
+                SET MinPrice = @MinPrice, Liquidity = @Liquidity, LastUpdated = @LastUpdated
+                WHERE Url = @Url;";
+            using (var command = new SQLiteCommand(updateItemQuery, connection))
+            {
+                command.Parameters.AddWithValue("@MinPrice", minPrice);
+                command.Parameters.AddWithValue("@Liquidity", liquidity);
+                command.Parameters.AddWithValue("@LastUpdated", lastUpdated);
+                command.Parameters.AddWithValue("@Url", "https://stalcraft-monitor.ru/auction?item=40vn");
+                command.ExecuteNonQuery();
+            }
+
+            // Вставка данных в таблицу Deals
+            string insertDealQuery = @"
+                INSERT INTO Deals (ItemUrl, DealDateTime, Quantity, Price, EnchantLevel, RowColor)
+                VALUES (@ItemUrl, @DealDateTime, @Quantity, @Price, @EnchantLevel, @RowColor);";
+            foreach (var deal in deals)
+            {
+                using (var command = new SQLiteCommand(insertDealQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@ItemUrl", "https://stalcraft-monitor.ru/auction?item=40vn");
+                    command.Parameters.AddWithValue("@DealDateTime", deal.DealDateTime);
+                    command.Parameters.AddWithValue("@Quantity", 1); // Пример количества
+                    command.Parameters.AddWithValue("@Price", deal.Price);
+                    command.Parameters.AddWithValue("@EnchantLevel", 0); // Пример уровня заточки
+                    command.Parameters.AddWithValue("@RowColor", "#EEEEEE"); // Пример цвета строки
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        Console.WriteLine("Данные успешно записаны в таблицу.");
+    }
+
+    static double CalculateLiquidity(List<(DateTime DealDateTime, decimal Price)> deals)
+    {
+        if (deals.Count == 0) return 24; // Если сделок нет, ликвидность 24 часа
+
+        DateTime lastDealTime = deals.Last().DealDateTime;
+        TimeSpan timeSinceLastDeal = DateTime.Now - lastDealTime;
+
+        return Math.Min(timeSinceLastDeal.TotalHours, 24); // Максимум 24 часа
+    }
 }
