@@ -17,16 +17,48 @@ class Program
 
         try
         {
-            driver.Navigate().GoToUrl("https://stalcraft-monitor.ru/auction?item=40vn");
-            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+            // Список предметов, для которых нужно выполнить парсинг
+            var itemNames = new List<string>
+            {
+                "Нестабильная аномальная батарея",
+                "Камень Жмых-Вжух-Плюх",
+                "Армейский аккумулятор",
+                "Аммиак",
+                "Стандартные инструменты",
+                "Стандартные запчасти",
+                "Продвинутые инструменты",
+                "Продвинутые запчасти",
+                "Дешевые инструменты",
+                "Дешевые запчасти",
+                "Цветущий рыжий папоротник",
+                "Пси-маячок",
+                "Портативный квантовый генератор",
+                "Очищенное вещество 07270",
+                "Блок данных «Гамма»"
+            };
 
-            float minPrice = CatchPrice(driver, wait);
-            var deals = ParseDeals(driver, wait);
+            // Получаем URL для каждого предмета из таблицы Items
+            var items = GetItemsFromDatabase(itemNames);
 
-            SaveDataToDatabase(minPrice, deals);
+            // Парсим данные для каждого предмета
+            foreach (var item in items)
+            {
+                Console.WriteLine($"Обрабатываем: {item.Name}");
+                driver.Navigate().GoToUrl(item.Url);
+                WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
 
-            // Вычисляем процентиль 80% для аммиака за последние сутки
-            Percentile("https://stalcraft-monitor.ru/auction?item=40vn", 0.8f);
+                float minPrice = CatchPrice(driver, wait);
+                var deals = ParseDeals(driver, wait);
+
+                SaveDataToDatabase(minPrice, deals, item.Url);
+            }
+
+            // Вычисляем процентиль для всех предметов
+            Console.WriteLine("\nСводочка! Кинте автору на водочку +7 (втб):");
+            foreach (var item in items)
+            {
+                Percentile(item.Url, item.Name, 0.8f);
+            }
         }
         catch (Exception ex)
         {
@@ -38,18 +70,49 @@ class Program
         }
     }
 
-    static void Percentile(string itemUrl, float percentile)
+    static List<(string Url, string Name)> GetItemsFromDatabase(List<string> itemNames)
+    {
+        var items = new List<(string Url, string Name)>();
+        string databasePath = "AuctionData.db";
+
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            // Формируем SQL-запрос для поиска URL по названиям предметов
+            string query = @"
+                SELECT Url, Name
+                FROM Items
+                WHERE Name IN (" + string.Join(",", itemNames.ConvertAll(name => $"'{name}'")) + ");";
+
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string url = reader.GetString(0);
+                        string name = reader.GetString(1);
+                        items.Add((url, name));
+                    }
+                }
+            }
+        }
+
+        return items;
+    }
+
+    static void Percentile(string itemUrl, string itemName, float percentile)
     {
         string databasePath = "AuctionData.db";
         using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
         {
             connection.Open();
 
-            // Получаем название предмета и минимальную цену из таблицы Items
-            string itemName = "";
+            // Получаем минимальную цену из таблицы Items
             float minPrice = 0;
             string itemQuery = @"
-                SELECT Name, MinPrice
+                SELECT MinPrice
                 FROM Items
                 WHERE Url = @ItemUrl;";
             using (var itemCommand = new SQLiteCommand(itemQuery, connection))
@@ -59,16 +122,9 @@ class Program
                 {
                     if (reader.Read())
                     {
-                        itemName = reader.GetString(0);
-                        minPrice = reader.GetFloat(1);
+                        minPrice = reader.GetFloat(0);
                     }
                 }
-            }
-
-            if (string.IsNullOrEmpty(itemName))
-            {
-                Console.WriteLine("Предмет не найден в таблице Items.");
-                return;
             }
 
             // Выбираем данные за последние сутки для конкретного предмета
@@ -76,7 +132,7 @@ class Program
                 SELECT Price / Quantity AS PricePerItem, DealDateTime, Quantity
                 FROM Deals
                 WHERE ItemUrl = @ItemUrl
-                    AND DealDateTime >= datetime('now', '-1 day')
+                  AND DealDateTime >= datetime('now', '-1 day')
                 ORDER BY PricePerItem ASC;";
 
             using (var command = new SQLiteCommand(query, connection))
@@ -114,7 +170,7 @@ class Program
 
                 if (prices.Count == 0)
                 {
-                    Console.WriteLine("Нет данных за последние сутки.");
+                    Console.WriteLine($"Нет данных за последние сутки для {itemName}.");
                     return;
                 }
 
@@ -123,7 +179,7 @@ class Program
                 index = Math.Max(0, Math.Min(index, prices.Count - 1)); // Ограничиваем индекс
 
                 float percentileValue = prices[index];
-                float purchasePrice = percentileValue * 0.9f;
+                float purchasePrice = percentileValue * 0.9f; // Цена покупки
 
                 // Находим наиболее частое количество предметов с ценой, близкой к percentileValue
                 var relevantQuantities = new Dictionary<int, int>();
@@ -145,10 +201,11 @@ class Program
                     }
                 }
 
-            int mostCommonQuantity = relevantQuantities.Count > 0
-                ? relevantQuantities.OrderByDescending(q => q.Value).First().Key
-                : quantities.OrderByDescending(q => q.Value).First().Key;
-                // Форматируем цену
+                int mostCommonQuantity = relevantQuantities.Count > 0
+                    ? relevantQuantities.OrderByDescending(q => q.Value).First().Key
+                    : quantities.OrderByDescending(q => q.Value).First().Key;
+
+                // Форматируем цены
                 string formattedPrice = FormatPrice(percentileValue);
                 string formattedMinPrice = FormatPrice(minPrice);
                 string formattedPurchasePrice = FormatPrice(purchasePrice);
@@ -197,11 +254,11 @@ class Program
     static float ExtractPrice(string priceText)
     {
         // Заменяем запятую на точку
-        priceText = priceText.Replace(",", "."); 
+        priceText = priceText.Replace(",", ".");
         // Удаляем все нецифровые символы, кроме точки
         priceText = Regex.Replace(priceText, @"[^\d.]", "");
         Console.WriteLine("Текст после обработки: " + priceText);
-        
+
         if (float.TryParse(priceText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float price))
         {
             return price;
@@ -239,34 +296,11 @@ class Program
                 string dateTimeText = cells[0].GetAttribute("innerText");
                 string priceText = cells[1].GetAttribute("innerText");
                 string rowColor = cells[0].GetAttribute("style").Replace("color: ", "").Replace(";", "").Trim();
-                
+
                 float price = ExtractPrice(priceText);
 
                 // Разделение даты и количества/заточки
                 var (dealDateTime, quantity, enchantLevel) = ParseDateTime(dateTimeText);
-                // string[] dateTimeParts = dateTimeText.Split(new[] { 'x', '+' }, StringSplitOptions.RemoveEmptyEntries);
-                // string cleanDateTimeText = dateTimeParts[0].Trim();
-                // int quantity = 1; // По умолчанию
-                // int enchantLevel = 1; // По умолчанию
-
-                // if (dateTimeText.Contains("x") && dateTimeParts.Length > 1)
-                // {
-                //     quantity = int.Parse(dateTimeParts[1]);
-                // }
-                // else if (dateTimeText.Contains("+") && dateTimeParts.Length > 1)
-                // {
-                //     enchantLevel = int.Parse(dateTimeParts[1]);
-                // }
-
-                // if (DateTime.TryParse(dateTimeText, out DateTime dealDateTime))
-                // {
-                //     Console.WriteLine("Дата: " + dealDateTime);
-                // }
-                // else
-                // {
-                //     dealDateTime = new DateTime(1970, 1, 1);
-                //     Console.WriteLine("Не удалось распознать дату: " + dateTimeText);
-                // }
 
                 deals.Add((dealDateTime, price, quantity, enchantLevel, rowColor));
             }
@@ -315,7 +349,7 @@ class Program
         return (dealDateTime, quantity, enchantLevel);
     }
 
-    static void SaveDataToDatabase(float minPrice, List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals)
+    static void SaveDataToDatabase(float minPrice, List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals, string itemUrl)
     {
         string databasePath = "AuctionData.db";
         using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
@@ -354,7 +388,7 @@ class Program
                 command.Parameters.AddWithValue("@MinPrice", minPrice);
                 command.Parameters.AddWithValue("@Liquidity", liquidity);
                 command.Parameters.AddWithValue("@LastUpdated", lastUpdated);
-                command.Parameters.AddWithValue("@Url", "https://stalcraft-monitor.ru/auction?item=40vn");
+                command.Parameters.AddWithValue("@Url", itemUrl);
                 command.ExecuteNonQuery();
             }
 
@@ -369,7 +403,7 @@ class Program
                 {
                     using (var command = new SQLiteCommand(insertDealQuery, connection))
                     {
-                        command.Parameters.AddWithValue("@ItemUrl", "https://stalcraft-monitor.ru/auction?item=40vn");
+                        command.Parameters.AddWithValue("@ItemUrl", itemUrl);
                         command.Parameters.AddWithValue("@DealDateTime", deal.DealDateTime);
                         command.Parameters.AddWithValue("@Quantity", deal.Quantity);
                         command.Parameters.AddWithValue("@Price", deal.Price);
