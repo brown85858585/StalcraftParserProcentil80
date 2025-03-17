@@ -4,6 +4,7 @@ using System.Data.SQLite;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
+using System.Text.RegularExpressions;
 
 class Program
 {
@@ -19,10 +20,13 @@ class Program
             driver.Navigate().GoToUrl("https://stalcraft-monitor.ru/auction?item=40vn");
             WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
 
-            decimal minPrice = CatchPrice(driver, wait);
+            float minPrice = CatchPrice(driver, wait);
             var deals = ParseDeals(driver, wait);
 
             SaveDataToDatabase(minPrice, deals);
+
+            // Вычисляем процентиль 80% для аммиака за последние сутки
+            Percentile("https://stalcraft-monitor.ru/auction?item=40vn", 0.8f);
         }
         catch (Exception ex)
         {
@@ -34,7 +38,52 @@ class Program
         }
     }
 
-    static decimal CatchPrice(IWebDriver driver, WebDriverWait wait)
+    static void Percentile(string itemUrl, float percentile)
+    {
+        string databasePath = "AuctionData.db";
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            // Выбираем данные за последние сутки для конкретного предмета
+            string query = @"
+                SELECT Price / Quantity AS PricePerItem
+                FROM Deals
+                WHERE ItemUrl = @ItemUrl
+                  AND DealDateTime >= datetime('now', '-1 day')
+                ORDER BY PricePerItem ASC;";
+
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@ItemUrl", itemUrl);
+
+                var prices = new List<float>();
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        float pricePerItem = reader.GetFloat(0);
+                        prices.Add(pricePerItem);
+                    }
+                }
+
+                if (prices.Count == 0)
+                {
+                    Console.WriteLine("Нет данных за последние сутки.");
+                    return;
+                }
+
+                // Вычисляем индекс для процентиля
+                int index = (int)Math.Ceiling(prices.Count * percentile) - 1;
+                index = Math.Max(0, Math.Min(index, prices.Count - 1)); // Ограничиваем индекс
+
+                float percentileValue = prices[index];
+                Console.WriteLine($"Процентиль {percentile * 100}% для {itemUrl}: {percentileValue}");
+            }
+        }
+    }
+
+    static float CatchPrice(IWebDriver driver, WebDriverWait wait)
     {
         IWebElement сatchPriceElement = wait.Until(d =>
         {
@@ -46,14 +95,15 @@ class Program
         return ExtractPrice(сatchPriceElement.Text);
     }
 
-    static decimal ExtractPrice(string priceText)
+    static float ExtractPrice(string priceText)
     {
-        // Console.WriteLine("Исходный текст цены: " + priceText);
-        priceText = priceText.Replace("&nbsp;", "").Replace("₽", "").Trim();
-        priceText = priceText.Replace(" ", "").Replace(",", ".");
+        // Заменяем запятую на точку
+        priceText = priceText.Replace(",", "."); 
+        // Удаляем все нецифровые символы, кроме точки
+        priceText = Regex.Replace(priceText, @"[^\d.]", "");
         Console.WriteLine("Текст после обработки: " + priceText);
         
-        if (decimal.TryParse(priceText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal price))
+        if (float.TryParse(priceText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float price))
         {
             return price;
         }
@@ -61,7 +111,7 @@ class Program
         return 0;
     }
 
-    static List<(DateTime DealDateTime, decimal Price, int Quantity, int EnchantLevel, string RowColor)> ParseDeals(IWebDriver driver, WebDriverWait wait)
+    static List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> ParseDeals(IWebDriver driver, WebDriverWait wait)
     {
         IWebElement dropdownButton = wait.Until(d => d.FindElement(By.Id("dropdownMenuLinkCountLoadItems")));
         dropdownButton.Click();
@@ -79,7 +129,7 @@ class Program
         });
 
         var rows = driver.FindElements(By.CssSelector("#contentHistoryLoots tr"));
-        var deals = new List<(DateTime DealDateTime, decimal Price, int Quantity, int EnchantLevel, string RowColor)>();
+        var deals = new List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)>();
         Console.WriteLine("Найдено строк: " + rows.Count);
 
         foreach (var row in rows)
@@ -90,12 +140,8 @@ class Program
                 string dateTimeText = cells[0].GetAttribute("innerText");
                 string priceText = cells[1].GetAttribute("innerText");
                 string rowColor = cells[0].GetAttribute("style").Replace("color: ", "").Replace(";", "").Trim();
-
-                // Console.WriteLine("cells[0].GetAttribute("innerText"): " + cells[0].GetAttribute("innerText"));
-                // Console.WriteLine("cells[1].GetAttribute("innerText"): " + cells[1].GetAttribute("innerText"));
-                // Console.WriteLine("Цвет строки: " + rowColor);
                 
-                decimal price = ExtractPrice(priceText);
+                float price = ExtractPrice(priceText);
 
                 // Разделение даты и количества/заточки
                 string[] dateTimeParts = dateTimeText.Split(new[] { 'x', '+' }, StringSplitOptions.RemoveEmptyEntries);
@@ -129,7 +175,7 @@ class Program
         return deals;
     }
 
-    static void SaveDataToDatabase(decimal minPrice, List<(DateTime DealDateTime, decimal Price, int Quantity, int EnchantLevel, string RowColor)> deals)
+    static void SaveDataToDatabase(float minPrice, List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals)
     {
         string databasePath = "AuctionData.db";
         using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
@@ -151,6 +197,9 @@ class Program
             {
                 command.ExecuteNonQuery();
             }
+
+            // Получаем самую "молодую" дату из базы данных
+            DateTime latestDealDateTime = GetLatestDealDateTime(connection);
 
             float liquidity = CalculateLiquidity(deals);
             DateTime lastUpdated = DateTime.Now;
@@ -175,15 +224,19 @@ class Program
                 VALUES (@ItemUrl, @DealDateTime, @Quantity, @Price, @EnchantLevel, @RowColor);";
             foreach (var deal in deals)
             {
-                using (var command = new SQLiteCommand(insertDealQuery, connection))
+                // Пропускаем сделки, которые старше или равны самой "молодой" дате
+                if (deal.DealDateTime >= latestDealDateTime)
                 {
-                    command.Parameters.AddWithValue("@ItemUrl", "https://stalcraft-monitor.ru/auction?item=40vn");
-                    command.Parameters.AddWithValue("@DealDateTime", deal.DealDateTime);
-                    command.Parameters.AddWithValue("@Quantity", deal.Quantity);
-                    command.Parameters.AddWithValue("@Price", deal.Price);
-                    command.Parameters.AddWithValue("@EnchantLevel", deal.EnchantLevel);
-                    command.Parameters.AddWithValue("@RowColor", deal.RowColor);
-                    command.ExecuteNonQuery();
+                    using (var command = new SQLiteCommand(insertDealQuery, connection))
+                    {
+                        command.Parameters.AddWithValue("@ItemUrl", "https://stalcraft-monitor.ru/auction?item=40vn");
+                        command.Parameters.AddWithValue("@DealDateTime", deal.DealDateTime);
+                        command.Parameters.AddWithValue("@Quantity", deal.Quantity);
+                        command.Parameters.AddWithValue("@Price", deal.Price);
+                        command.Parameters.AddWithValue("@EnchantLevel", deal.EnchantLevel);
+                        command.Parameters.AddWithValue("@RowColor", deal.RowColor);
+                        command.ExecuteNonQuery();
+                    }
                 }
             }
         }
@@ -191,7 +244,25 @@ class Program
         Console.WriteLine("Данные успешно записаны в таблицу.");
     }
 
-    static float CalculateLiquidity(List<(DateTime DealDateTime, decimal Price, int Quantity, int EnchantLevel, string RowColor)> deals)
+    static DateTime GetLatestDealDateTime(SQLiteConnection connection)
+    {
+        string query = "SELECT MAX(DealDateTime) FROM Deals;";
+        using (var command = new SQLiteCommand(query, connection))
+        {
+            var result = command.ExecuteScalar();
+            if (result != null && result != DBNull.Value)
+            {
+                string dateTimeString = result.ToString();
+                if (!string.IsNullOrEmpty(dateTimeString))
+                {
+                    return DateTime.Parse(dateTimeString);
+                }
+            }
+        }
+        return DateTime.MinValue; // Если база данных пуста
+    }
+
+    static float CalculateLiquidity(List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals)
     {
         if (deals.Count == 0) return 24; // Если сделок нет, ликвидность 24 часа
 
