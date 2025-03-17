@@ -37,6 +37,7 @@ class Program
             driver.Quit();
         }
     }
+
     static void Percentile(string itemUrl, float percentile)
     {
         string databasePath = "AuctionData.db";
@@ -72,10 +73,10 @@ class Program
 
             // Выбираем данные за последние сутки для конкретного предмета
             string query = @"
-                SELECT Price / Quantity AS PricePerItem, DealDateTime
+                SELECT Price / Quantity AS PricePerItem, DealDateTime, Quantity
                 FROM Deals
                 WHERE ItemUrl = @ItemUrl
-                AND DealDateTime >= datetime('now', '-1 day')
+                    AND DealDateTime >= datetime('now', '-1 day')
                 ORDER BY PricePerItem ASC;";
 
             using (var command = new SQLiteCommand(query, connection))
@@ -83,6 +84,7 @@ class Program
                 command.Parameters.AddWithValue("@ItemUrl", itemUrl);
 
                 var prices = new List<float>();
+                var quantities = new Dictionary<int, int>(); // Количество предметов и их частота
                 DateTime oldestDeal = DateTime.MaxValue;
                 DateTime newestDeal = DateTime.MinValue;
 
@@ -92,8 +94,15 @@ class Program
                     {
                         float pricePerItem = reader.GetFloat(0);
                         DateTime dealDateTime = reader.GetDateTime(1);
+                        int quantity = reader.GetInt32(2);
 
                         prices.Add(pricePerItem);
+
+                        // Обновляем частоту количества предметов
+                        if (quantities.ContainsKey(quantity))
+                            quantities[quantity]++;
+                        else
+                            quantities[quantity] = 1;
 
                         // Обновляем временной диапазон
                         if (dealDateTime < oldestDeal)
@@ -114,23 +123,43 @@ class Program
                 index = Math.Max(0, Math.Min(index, prices.Count - 1)); // Ограничиваем индекс
 
                 float percentileValue = prices[index];
-                string comandToMen = "";
+                float purchasePrice = percentileValue * 0.9f;
 
+                // Находим наиболее частое количество предметов с ценой, близкой к percentileValue
+                var relevantQuantities = new Dictionary<int, int>();
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        float pricePerItem = reader.GetFloat(0);
+                        int quantity = reader.GetInt32(2);
+
+                        // Если цена за штуку близка к percentileValue, учитываем количество
+                        if (Math.Abs(pricePerItem - percentileValue) < 0.01f)
+                        {
+                            if (relevantQuantities.ContainsKey(quantity))
+                                relevantQuantities[quantity]++;
+                            else
+                                relevantQuantities[quantity] = 1;
+                        }
+                    }
+                }
+
+            int mostCommonQuantity = relevantQuantities.Count > 0
+                ? relevantQuantities.OrderByDescending(q => q.Value).First().Key
+                : quantities.OrderByDescending(q => q.Value).First().Key;
                 // Форматируем цену
                 string formattedPrice = FormatPrice(percentileValue);
                 string formattedMinPrice = FormatPrice(minPrice);
+                string formattedPurchasePrice = FormatPrice(purchasePrice);
 
-                if (minPrice < percentileValue)
-                {
-                    comandToMen = "А ты еще все здесь сидишь!!!";
-                }
-                else
-                {
-                    comandToMen = "Так что все спокойно.";
-                }
+                // Формируем сообщение
+                string comandToMen = minPrice < purchasePrice
+                    ? $"Покупай ниже {formattedPurchasePrice}"
+                    : "Жди рынка";
 
                 // Выводим результат
-                Console.WriteLine($"Сейчас {itemName} на ауке минимум за {formattedMinPrice}, недавно его продавали за  {formattedPrice}, если учесть {prices.Count} сделок {percentile * 100}%. Последняя продажа была {newestDeal:dd.MM.yyyy HH:mm:ss}. {comandToMen}");
+                Console.WriteLine($"{itemName} минимум за {formattedMinPrice}, продавать за {formattedPrice} по х{mostCommonQuantity} штук, {prices.Count} число сделок {percentile * 100}%. {comandToMen}");
             }
         }
     }
@@ -214,35 +243,76 @@ class Program
                 float price = ExtractPrice(priceText);
 
                 // Разделение даты и количества/заточки
-                string[] dateTimeParts = dateTimeText.Split(new[] { 'x', '+' }, StringSplitOptions.RemoveEmptyEntries);
-                string cleanDateTimeText = dateTimeParts[0].Trim();
-                int quantity = 1; // По умолчанию
-                int enchantLevel = 1; // По умолчанию
+                var (dealDateTime, quantity, enchantLevel) = ParseDateTime(dateTimeText);
+                // string[] dateTimeParts = dateTimeText.Split(new[] { 'x', '+' }, StringSplitOptions.RemoveEmptyEntries);
+                // string cleanDateTimeText = dateTimeParts[0].Trim();
+                // int quantity = 1; // По умолчанию
+                // int enchantLevel = 1; // По умолчанию
 
-                if (dateTimeText.Contains("x") && dateTimeParts.Length > 1)
-                {
-                    quantity = int.Parse(dateTimeParts[1]);
-                }
-                else if (dateTimeText.Contains("+") && dateTimeParts.Length > 1)
-                {
-                    enchantLevel = int.Parse(dateTimeParts[1]);
-                }
+                // if (dateTimeText.Contains("x") && dateTimeParts.Length > 1)
+                // {
+                //     quantity = int.Parse(dateTimeParts[1]);
+                // }
+                // else if (dateTimeText.Contains("+") && dateTimeParts.Length > 1)
+                // {
+                //     enchantLevel = int.Parse(dateTimeParts[1]);
+                // }
 
-                if (DateTime.TryParse(dateTimeText, out DateTime dealDateTime))
-                {
-                    Console.WriteLine("Найдена сделка с датой: " + dealDateTime);
-                }
-                else
-                {
-                    dealDateTime = new DateTime(1970, 1, 1);
-                    Console.WriteLine("Не удалось распознать дату: " + dateTimeText);
-                }
+                // if (DateTime.TryParse(dateTimeText, out DateTime dealDateTime))
+                // {
+                //     Console.WriteLine("Дата: " + dealDateTime);
+                // }
+                // else
+                // {
+                //     dealDateTime = new DateTime(1970, 1, 1);
+                //     Console.WriteLine("Не удалось распознать дату: " + dateTimeText);
+                // }
 
                 deals.Add((dealDateTime, price, quantity, enchantLevel, rowColor));
             }
         }
 
         return deals;
+    }
+
+    static (DateTime DealDateTime, int Quantity, int EnchantLevel) ParseDateTime(string dateTimeText)
+    {
+        // Регулярное выражение для извлечения даты, времени, количества и заточки
+        var match = Regex.Match(dateTimeText, @"(\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2})(?:\s*(x\d+|\+\d+))?");
+        if (!match.Success)
+        {
+            Console.WriteLine($"Не удалось распознать дату: {dateTimeText}");
+            return (new DateTime(1970, 1, 1), 1, 1); // Возвращаем значения по умолчанию
+        }
+
+        // Извлекаем дату и время
+        string cleanDateTimeText = match.Groups[1].Value.Trim();
+
+        // Парсим дату и время
+        if (!DateTime.TryParse(cleanDateTimeText, out DateTime dealDateTime))
+        {
+            Console.WriteLine($"Не удалось распознать дату: {cleanDateTimeText}");
+            return (new DateTime(1970, 1, 1), 1, 1); // Возвращаем значения по умолчанию
+        }
+
+        // Извлекаем количество или заточку
+        int quantity = 1; // По умолчанию
+        int enchantLevel = 1; // По умолчанию
+
+        if (match.Groups[2].Success)
+        {
+            string extraInfo = match.Groups[2].Value.Trim();
+            if (extraInfo.StartsWith("x"))
+            {
+                quantity = int.Parse(extraInfo.Substring(1));
+            }
+            else if (extraInfo.StartsWith("+"))
+            {
+                enchantLevel = int.Parse(extraInfo.Substring(1));
+            }
+        }
+        Console.WriteLine("Дата: " + dealDateTime);
+        return (dealDateTime, quantity, enchantLevel);
     }
 
     static void SaveDataToDatabase(float minPrice, List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals)
