@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("StalcraftParser")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4a7dff7c238955931853e4432cd7c23eb01a2aa2")]
 [assembly: System.Reflection.AssemblyProductAttribute("StalcraftParser")]
 [assembly: System.Reflection.AssemblyTitleAttribute("StalcraftParser")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

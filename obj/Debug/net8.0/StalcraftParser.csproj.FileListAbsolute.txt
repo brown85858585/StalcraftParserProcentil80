@@ -44,3 +44,4 @@ C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser\obj\Debug\net8.0\refint\Stalc
 C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser\obj\Debug\net8.0\StalcraftParser.pdb
 C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser\obj\Debug\net8.0\StalcraftParser.genruntimeconfig.cache
 C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser\obj\Debug\net8.0\ref\StalcraftParser.dll
+C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser\obj\Debug\net8.0\StalcraftParser.sourcelink.json
