@@ -1,0 +1,2 @@
+-- SQLite
+DROP TABLE IF EXISTS deals;
