@@ -5,6 +5,7 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 class Program
 {
@@ -12,7 +13,7 @@ class Program
     {
         var driverPath = @"C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser";
         var options = new ChromeOptions();
-        options.AddArgument("--headless"); // Без графического интерфейса
+        // options.AddArgument("--headless"); // Без графического интерфейса
         var driver = new ChromeDriver(driverPath, options);
 
         try
@@ -40,21 +41,53 @@ class Program
             // Получаем URL для каждого предмета из таблицы Items
             var items = GetItemsFromDatabase(itemNames);
 
+            // Перемешиваем список предметов для случайного порядка обработки
+            var random = new Random();
+            items = items.OrderBy(x => random.Next()).ToList();
+
+            // Создаем WebDriverWait для повторного использования
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+
             // Парсим данные для каждого предмета
             foreach (var item in items)
             {
                 Console.WriteLine($"Обрабатываем: {item.Name}");
+
+                // Проверяем время последнего обновления
+                DateTime lastUpdated = GetLastUpdatedFromDatabase(item.Url);
+                if ((DateTime.Now - lastUpdated).TotalMinutes < 10)
+                {
+                    Console.WriteLine($"Последнее обновление было менее 10 минут назад. Пропускаем предмет: {item.Name}");
+                    continue; // Переходим к следующему предмету
+                }
+
                 driver.Navigate().GoToUrl(item.Url);
-                WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+
+                // Проверяем, активно ли модальное окно с сообщением о лимите запросов
+                if (IsRateLimitModalActive(driver))
+                {
+                    Console.WriteLine("Обнаружено сообщение 'Лимит запросов превышен'. Ожидание...");
+
+                    // Ждем, пока окно не исчезнет
+                    wait.Until(d => !IsRateLimitModalActive(d));
+
+                    Console.WriteLine("Сообщение исчезло. Продолжаем работу.");
+                }
 
                 float minPrice = CatchPrice(driver, wait);
-                var deals = ParseDeals(driver, wait);
 
-                SaveDataToDatabase(minPrice, deals, item.Url);
+                // Парсим сделки, если прошло больше часа с последнего обновления
+                if ((DateTime.Now - lastUpdated).TotalHours >= 1)
+                {
+                    var deals = ParseDealsWithRetry(driver, wait);
+                    SaveDataToDeals(deals, item.Url);
+                }
+
+                SaveDataToItems(minPrice, item.Url);
             }
 
             // Вычисляем процентиль для всех предметов
-            Console.WriteLine("\nСводочка! Кинте автору на водочку +7 (втб):");
+            Console.WriteLine("\nБлагодарю за понимание");
             foreach (var item in items)
             {
                 Percentile(item.Url, item.Name, 0.8f);
@@ -70,36 +103,21 @@ class Program
         }
     }
 
-    static List<(string Url, string Name)> GetItemsFromDatabase(List<string> itemNames)
+    static bool IsRateLimitModalActive(IWebDriver driver)
     {
-        var items = new List<(string Url, string Name)>();
-        string databasePath = "AuctionData.db";
-
-        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        try
         {
-            connection.Open();
+            // Ищем модальное окно по ID
+            var modal = driver.FindElement(By.Id("modelWaitRequest"));
 
-            // Формируем SQL-запрос для поиска URL по названиям предметов
-            string query = @"
-                SELECT Url, Name
-                FROM Items
-                WHERE Name IN (" + string.Join(",", itemNames.ConvertAll(name => $"'{name}'")) + ");";
-
-            using (var command = new SQLiteCommand(query, connection))
-            {
-                using (var reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        string url = reader.GetString(0);
-                        string name = reader.GetString(1);
-                        items.Add((url, name));
-                    }
-                }
-            }
+            // Проверяем, видимо ли окно
+            return modal.Displayed;
         }
-
-        return items;
+        catch (NoSuchElementException)
+        {
+            // Если элемент не найден, окно не активно
+            return false;
+        }
     }
 
     static void Percentile(string itemUrl, string itemName, float percentile)
@@ -221,6 +239,38 @@ class Program
         }
     }
 
+    static List<(string Url, string Name)> GetItemsFromDatabase(List<string> itemNames)
+    {
+        var items = new List<(string Url, string Name)>();
+        string databasePath = "AuctionData.db";
+
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            // Формируем SQL-запрос для поиска URL по названиям предметов
+            string query = @"
+                SELECT Url, Name
+                FROM Items
+                WHERE Name IN (" + string.Join(",", itemNames.ConvertAll(name => $"'{name}'")) + ");";
+
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string url = reader.GetString(0);
+                        string name = reader.GetString(1);
+                        items.Add((url, name));
+                    }
+                }
+            }
+        }
+
+        return items;
+    }
+
     static string FormatPrice(float price)
     {
         // Разделяем целую и дробную части
@@ -237,6 +287,31 @@ class Program
 
         // Собираем итоговую строку
         return $"{integerPart}.{fractionalPart} ₽";
+    }
+
+    static DateTime GetLastUpdatedFromDatabase(string itemUrl)
+    {
+        string databasePath = "AuctionData.db";
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            string query = @"
+                SELECT LastUpdated
+                FROM Items
+                WHERE Url = @ItemUrl;";
+
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@ItemUrl", itemUrl);
+                var result = command.ExecuteScalar();
+                if (result != null && result != DBNull.Value)
+                {
+                    return DateTime.Parse(result.ToString()!); // Добавляем "!" для уверенности, что значение не null
+                }
+            }
+        }
+        return DateTime.MinValue;
     }
 
     static float CatchPrice(IWebDriver driver, WebDriverWait wait)
@@ -265,6 +340,23 @@ class Program
         }
         Console.WriteLine("Не удалось преобразовать цену в число. Текст: " + priceText);
         return 0;
+    }
+
+    static List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> ParseDealsWithRetry(IWebDriver driver, WebDriverWait wait, int retryCount = 3)
+    {
+        for (int i = 0; i < retryCount; i++)
+        {
+            try
+            {
+                return ParseDeals(driver, wait);
+            }
+            catch (StaleElementReferenceException)
+            {
+                Console.WriteLine($"Попытка {i + 1} из {retryCount}: stale element reference, повторяем...");
+                if (i == retryCount - 1) throw;
+            }
+        }
+        return new List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)>();
     }
 
     static List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> ParseDeals(IWebDriver driver, WebDriverWait wait)
@@ -349,7 +441,7 @@ class Program
         return (dealDateTime, quantity, enchantLevel);
     }
 
-    static void SaveDataToDatabase(float minPrice, List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals, string itemUrl)
+    static void SaveDataToDeals(List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals, string itemUrl)
     {
         string databasePath = "AuctionData.db";
         using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
@@ -375,23 +467,6 @@ class Program
             // Получаем самую "молодую" дату из базы данных
             DateTime latestDealDateTime = GetLatestDealDateTime(connection);
 
-            float liquidity = CalculateLiquidity(deals);
-            DateTime lastUpdated = DateTime.Now;
-
-            // Обновление таблицы Items
-            string updateItemQuery = @"
-                UPDATE Items
-                SET MinPrice = @MinPrice, Liquidity = @Liquidity, LastUpdated = @LastUpdated
-                WHERE Url = @Url;";
-            using (var command = new SQLiteCommand(updateItemQuery, connection))
-            {
-                command.Parameters.AddWithValue("@MinPrice", minPrice);
-                command.Parameters.AddWithValue("@Liquidity", liquidity);
-                command.Parameters.AddWithValue("@LastUpdated", lastUpdated);
-                command.Parameters.AddWithValue("@Url", itemUrl);
-                command.ExecuteNonQuery();
-            }
-
             // Вставка данных в таблицу Deals
             string insertDealQuery = @"
                 INSERT INTO Deals (ItemUrl, DealDateTime, Quantity, Price, EnchantLevel, RowColor)
@@ -415,7 +490,31 @@ class Program
             }
         }
 
-        Console.WriteLine("Данные успешно записаны в таблицу.");
+        Console.WriteLine("Данные успешно записаны в таблицу Deals.");
+    }
+
+    static void SaveDataToItems(float minPrice, string itemUrl)
+    {
+        string databasePath = "AuctionData.db";
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            // Обновление таблицы Items
+            string updateItemQuery = @"
+                UPDATE Items
+                SET MinPrice = @MinPrice, LastUpdated = @LastUpdated
+                WHERE Url = @Url;";
+            using (var command = new SQLiteCommand(updateItemQuery, connection))
+            {
+                command.Parameters.AddWithValue("@MinPrice", minPrice);
+                command.Parameters.AddWithValue("@LastUpdated", DateTime.Now);
+                command.Parameters.AddWithValue("@Url", itemUrl);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        Console.WriteLine("Данные успешно записаны в таблицу Items.");
     }
 
     static DateTime GetLatestDealDateTime(SQLiteConnection connection)
@@ -426,7 +525,7 @@ class Program
             var result = command.ExecuteScalar();
             if (result != null && result != DBNull.Value)
             {
-                string dateTimeString = result.ToString();
+                string dateTimeString = result.ToString()!; // Добавляем "!" для уверенности, что значение не null
                 if (!string.IsNullOrEmpty(dateTimeString))
                 {
                     return DateTime.Parse(dateTimeString);
@@ -434,15 +533,5 @@ class Program
             }
         }
         return DateTime.MinValue; // Если база данных пуста
-    }
-
-    static float CalculateLiquidity(List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> deals)
-    {
-        if (deals.Count == 0) return 24; // Если сделок нет, ликвидность 24 часа
-
-        DateTime lastDealTime = deals.Last().DealDateTime;
-        TimeSpan timeSinceLastDeal = DateTime.Now - lastDealTime;
-
-        return (float)Math.Min(timeSinceLastDeal.TotalHours, 24); // Максимум 24 часа
     }
 }
