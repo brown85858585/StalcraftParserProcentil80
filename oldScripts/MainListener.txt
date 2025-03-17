@@ -1,0 +1,56 @@
+using System;
+using System.Reflection;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        Console.WriteLine("Сервер слушает");
+        // Бесконечный цикл для слушателя команд
+        while (true)
+        {
+            Console.WriteLine("Введите команду (или 'exit' для выхода):");
+            string command = Console.ReadLine();
+
+            if (command.ToLower() == "exit")
+            {
+                break;
+            }
+
+            // Поиск и выполнение команды
+            ExecuteCommand(command);
+        }
+    }
+
+    static void ExecuteCommand(string command)
+    {
+        try
+        {
+            // Поиск класса и метода по названию команды
+            Type scriptType = Type.GetType($"Scripts.{command}");
+            if (scriptType == null)
+            {
+                Console.WriteLine($"Команда '{command}' не найдена.");
+                return;
+            }
+
+            // Создание экземпляра класса
+            object scriptInstance = Activator.CreateInstance(scriptType);
+
+            // Поиск метода "Run" в классе
+            MethodInfo runMethod = scriptType.GetMethod("Run");
+            if (runMethod == null)
+            {
+                Console.WriteLine($"Метод 'Run' не найден в классе '{command}'.");
+                return;
+            }
+
+            // Вызов метода
+            runMethod.Invoke(scriptInstance, null);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при выполнении команды: {ex.Message}");
+        }
+    }
+}

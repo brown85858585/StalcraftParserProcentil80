@@ -1,0 +1,98 @@
+using System;
+using System.Collections.Generic;
+using System.Data.SQLite;
+using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
+
+class ItemLinksParser
+{
+    static void Main(string[] args)
+    {
+        // Указываем путь к chromedriver.exe
+        var driverPath = @"C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser";
+        var options = new ChromeOptions();
+        // options.AddArgument("--headless"); // Без графического интерфейса
+        var driver = new ChromeDriver(driverPath, options);
+
+        try
+        {
+            // Переход на страницу аукциона
+            driver.Navigate().GoToUrl("https://stalcraft-monitor.ru/auction");
+
+            // Ожидание загрузки страницы
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(20));
+
+            // Ввод символа "а" в поисковую строку
+            IWebElement searchInput = wait.Until(d => d.FindElement(By.Id("searchItem")));
+            searchInput.SendKeys("а");
+
+            // Удаление символа "а"
+            searchInput.SendKeys(Keys.Backspace);
+
+            // Ожидание появления результатов поиска
+            wait.Until(d => d.FindElement(By.ClassName("contentItem")));
+
+            // Поиск всех элементов с предметами
+            var items = driver.FindElements(By.ClassName("contentItem"));
+
+            // Создаём список для хранения данных
+            var itemList = new List<(string Name, string Id, string Url)>();
+
+            foreach (var item in items)
+            {
+                string name = item.FindElement(By.ClassName("nameItemText")).Text;
+                string id = item.GetAttribute("onclick").Replace("selectItem('", "").Replace("')", "");
+                string url = $"https://stalcraft-monitor.ru/auction?item={id}";
+
+                itemList.Add((name, id, url));
+            }
+
+            // Запись данных в базу данных
+            string databasePath = "AuctionData.db";
+            using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+            {
+                connection.Open();
+
+                string createTableQuery = @"
+                    CREATE TABLE IF NOT EXISTS ItemLinks (
+                        Id TEXT PRIMARY KEY,
+                        Name TEXT NOT NULL,
+                        Url TEXT NOT NULL
+                    );";
+
+                using (var command = new SQLiteCommand(createTableQuery, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+
+                string insertQuery = @"
+                    INSERT INTO ItemLinks (Id, Name, Url)
+                    VALUES (@Id, @Name, @Url);";
+
+                foreach (var item in itemList)
+                {
+                    Console.WriteLine("Предмет вписан в таблицу" + item.Name);
+                    using (var command = new SQLiteCommand(insertQuery, connection))
+                    {
+                        command.Parameters.AddWithValue("@Id", item.Id);
+                        command.Parameters.AddWithValue("@Name", item.Name);
+                        command.Parameters.AddWithValue("@Url", item.Url);
+                        command.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            Console.WriteLine("Данные успешно записаны в таблицу.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Произошла ошибка: " + ex.Message);
+        }
+        finally
+        {
+            // Закрытие браузера
+            driver.Quit();
+        }
+    }
+}

@@ -1,0 +1,30 @@
+using System;
+using System.Data.SQLite;
+
+namespace StalcraftParser
+{
+    class CleanOldData
+    {
+        static void Main(string[] args)
+        {
+            string databasePath = "AuctionData.db";
+
+            using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+            {
+                connection.Open();
+
+                // Удаляем записи старше недели
+                string deleteQuery = @"
+                    DELETE FROM TestPrices
+                    WHERE Timestamp < @OneWeekAgo;";
+
+                using (var command = new SQLiteCommand(deleteQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@OneWeekAgo", DateTime.Now.AddDays(-7));
+                    int rowsDeleted = command.ExecuteNonQuery();
+                    Console.WriteLine($"Удалено записей: {rowsDeleted}");
+                }
+            }
+        }
+    }
+}

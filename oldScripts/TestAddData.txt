@@ -1,0 +1,41 @@
+using System;
+using System.Data.SQLite;
+
+namespace StalcraftParser
+{
+    class AddTestData
+    {
+        static void Main(string[] args)
+        {
+            string databasePath = "AuctionData.db";
+
+            using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+            {
+                connection.Open();
+
+                // Добавляем Коксующийся уголь
+                InsertPrice(connection, "Коксующийся уголь", 12000, DateTime.Now);
+
+                // Добавляем Кровавую пудру с датой 10 марта
+                InsertPrice(connection, "Кровавая пудра", 470, new DateTime(2024, 3, 10));
+
+                Console.WriteLine("Тестовые данные добавлены.");
+            }
+        }
+
+        static void InsertPrice(SQLiteConnection connection, string itemName, decimal price, DateTime timestamp)
+        {
+            string insertQuery = @"
+                INSERT INTO TestPrices (ItemName, Price, Timestamp)
+                VALUES (@ItemName, @Price, @Timestamp);";
+
+            using (var command = new SQLiteCommand(insertQuery, connection))
+            {
+                command.Parameters.AddWithValue("@ItemName", itemName);
+                command.Parameters.AddWithValue("@Price", price);
+                command.Parameters.AddWithValue("@Timestamp", timestamp);
+                command.ExecuteNonQuery();
+            }
+        }
+    }
+}

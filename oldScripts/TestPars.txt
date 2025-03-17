@@ -1,0 +1,102 @@
+﻿using System;
+using System.Data.SQLite;
+using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // Указываем путь к chromedriver.exe
+        var driverPath = @"C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser";
+        var options = new ChromeOptions();
+        // options.AddArgument("--headless"); // Без графического интерфейса
+        // options.AddArgument("--proxy-server=http://your-proxy-address:port");
+
+        var driver = new ChromeDriver(driverPath, options);
+
+        try
+        {
+            // Переход на страницу аммиака
+            driver.Navigate().GoToUrl("https://stalcraft-monitor.ru/auction?item=40vn");
+
+            // Ожидание загрузки страницы. 10 - макс время ожидания
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
+
+            // Ожидание загрузки минимальной цены
+            IWebElement minPriceElement = wait.Until(d =>
+            {
+                try
+                {
+                    var element = d.FindElement(By.Id("tempMinPrice"));
+                    return element.Text != "" ? element : null;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Ошибка при поиске элемента: " + ex.Message);
+                    return null;
+                }
+            });
+
+            // Извлечение минимальной цены
+            string minPriceText = minPriceElement.Text;
+            decimal minPriceNumber = ExtractPrice(minPriceText);
+
+            // Вывод результата
+            Console.WriteLine("Минимальная цена: " + minPriceNumber);
+
+            // Запись данных в базу данных
+            string databasePath = "AuctionData.db";
+            using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+            {
+                connection.Open();
+
+                string insertQuery = @"
+                    INSERT INTO TestPrices (ItemName, Price, Timestamp)
+                    VALUES (@ItemName, @Price, @Timestamp);";
+
+                using (var command = new SQLiteCommand(insertQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@ItemName", "Аммиак");
+                    command.Parameters.AddWithValue("@Price", minPriceNumber);
+                    command.Parameters.AddWithValue("@Timestamp", DateTime.Now);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            Console.WriteLine("Данные успешно записаны в таблицу.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Произошла ошибка: " + ex.Message);
+        }
+        finally
+        {
+            // Закрытие браузера
+            driver.Quit();
+        }
+    }
+
+    static decimal ExtractPrice(string priceText)
+    {
+        // Удаляем лишние символы
+        priceText = priceText.Replace("&nbsp;", "").Replace("₽", "").Trim();
+
+        // Удаляем все пробелы
+        priceText = priceText.Replace(" ", "");
+
+        // Заменяем запятую на точку
+        priceText = priceText.Replace(",", ".");
+
+        // Преобразуем в число
+        if (decimal.TryParse(priceText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal price))
+        {
+            return price;
+        }
+        else
+        {
+            throw new FormatException("Не удалось преобразовать цену в число.");
+        }
+    }
+}
