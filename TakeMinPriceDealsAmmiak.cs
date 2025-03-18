@@ -13,7 +13,7 @@ class Program
     {
         var driverPath = @"C:\my_jobs(only)\Auction_Stalcraft\StalcraftParser";
         var options = new ChromeOptions();
-        // options.AddArgument("--headless"); // Без графического интерфейса
+        options.AddArgument("--headless"); // Без графического интерфейса
         var driver = new ChromeDriver(driverPath, options);
 
         try
@@ -40,13 +40,7 @@ class Program
 
             // Получаем URL для каждого предмета из таблицы Items
             var items = GetItemsFromDatabase(itemNames);
-
-            // Перемешиваем список предметов для случайного порядка обработки
-            var random = new Random();
-            items = items.OrderBy(x => random.Next()).ToList();
-
-            // Создаем WebDriverWait для повторного использования
-            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(60));
+            WebDriverWait wait = new WebDriverWait(driver, TimeSpan.FromSeconds(100));
 
             // Парсим данные для каждого предмета
             foreach (var item in items)
@@ -55,7 +49,7 @@ class Program
 
                 // Проверяем время последнего обновления
                 DateTime lastUpdated = GetLastUpdatedFromDatabase(item.Url);
-                if ((DateTime.Now - lastUpdated).TotalMinutes < 10)
+                if ((DateTime.Now - lastUpdated).TotalMinutes < 60)
                 {
                     Console.WriteLine($"Последнее обновление было менее 10 минут назад. Пропускаем предмет: {item.Name}");
                     continue; // Переходим к следующему предмету
@@ -64,15 +58,7 @@ class Program
                 driver.Navigate().GoToUrl(item.Url);
 
                 // Проверяем, активно ли модальное окно с сообщением о лимите запросов
-                if (IsRateLimitModalActive(driver))
-                {
-                    Console.WriteLine("Обнаружено сообщение 'Лимит запросов превышен'. Ожидание...");
-
-                    // Ждем, пока окно не исчезнет
-                    wait.Until(d => !IsRateLimitModalActive(d));
-
-                    Console.WriteLine("Сообщение исчезло. Продолжаем работу.");
-                }
+                WaitLimitModalActive(driver, wait);
 
                 float minPrice = CatchPrice(driver, wait);
 
@@ -86,11 +72,11 @@ class Program
                 SaveDataToItems(minPrice, item.Url);
             }
 
-            // Вычисляем процентиль для всех предметов
-            Console.WriteLine("\nБлагодарю за понимание");
+            float percentile = 0.90f;
+            Console.WriteLine($"\nПроцентиль {percentile * 100}");
             foreach (var item in items)
             {
-                Percentile(item.Url, item.Name, 0.8f);
+                Percentile(item.Url, item.Name, percentile);
             }
         }
         catch (Exception ex)
@@ -100,6 +86,15 @@ class Program
         finally
         {
             driver.Quit();
+        }
+    }
+
+    static void WaitLimitModalActive(IWebDriver driver, WebDriverWait wait){
+        if (IsRateLimitModalActive(driver))
+        {
+            Console.WriteLine("Обнаружено сообщение 'Лимит запросов превышен'. Ожидание...");
+            // Ждем, пока окно не исчезнет
+            wait.Until(d => !IsRateLimitModalActive(d));
         }
     }
 
@@ -223,18 +218,18 @@ class Program
                     ? relevantQuantities.OrderByDescending(q => q.Value).First().Key
                     : quantities.OrderByDescending(q => q.Value).First().Key;
 
-                // Форматируем цены
                 string formattedPrice = FormatPrice(percentileValue);
                 string formattedMinPrice = FormatPrice(minPrice);
                 string formattedPurchasePrice = FormatPrice(purchasePrice);
 
-                // Формируем сообщение
                 string comandToMen = minPrice < purchasePrice
-                    ? $"Покупай ниже {formattedPurchasePrice}"
-                    : "Жди рынка";
+                    ? $"Покупай ниже {formattedPurchasePrice}. Есть варианты"
+                    : $"Покупай ниже {formattedPurchasePrice}. Жди рынка";
 
                 // Выводим результат
-                Console.WriteLine($"{itemName} минимум за {formattedMinPrice}, продавать за {formattedPrice} по х{mostCommonQuantity} штук, {prices.Count} число сделок {percentile * 100}%. {comandToMen}");
+                Console.WriteLine($"Аук {formattedMinPrice}, покупали {formattedPrice} х {mostCommonQuantity} штук. |{itemName}| {comandToMen}");
+                // Console.WriteLine($"");
+                // Console.WriteLine($"");
             }
         }
     }
@@ -332,7 +327,7 @@ class Program
         priceText = priceText.Replace(",", ".");
         // Удаляем все нецифровые символы, кроме точки
         priceText = Regex.Replace(priceText, @"[^\d.]", "");
-        Console.WriteLine("Текст после обработки: " + priceText);
+        // Console.WriteLine("Текст после обработки: " + priceText);
 
         if (float.TryParse(priceText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float price))
         {
@@ -369,6 +364,7 @@ class Program
 
         IWebElement loadButton = wait.Until(d => d.FindElement(By.XPath("//button[contains(text(), 'Загрузить')]")));
         loadButton.Click();
+        WaitLimitModalActive(driver, wait);
 
         wait.Until(d =>
         {
@@ -394,6 +390,7 @@ class Program
                 // Разделение даты и количества/заточки
                 var (dealDateTime, quantity, enchantLevel) = ParseDateTime(dateTimeText);
 
+                Console.WriteLine("Дата: " + dealDateTime + ", Цена: " + price);
                 deals.Add((dealDateTime, price, quantity, enchantLevel, rowColor));
             }
         }
@@ -437,7 +434,7 @@ class Program
                 enchantLevel = int.Parse(extraInfo.Substring(1));
             }
         }
-        Console.WriteLine("Дата: " + dealDateTime);
+        // Console.WriteLine("Дата: " + dealDateTime);
         return (dealDateTime, quantity, enchantLevel);
     }
 

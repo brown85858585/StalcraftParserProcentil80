@@ -54,6 +54,10 @@
             "System.Data.SQLite": {
               "target": "Package",
               "version": "[1.0.119, )"
+            },
+            "Telegram.Bot": {
+              "target": "Package",
+              "version": "[22.4.4, )"
             }
           },
           "imports": [
