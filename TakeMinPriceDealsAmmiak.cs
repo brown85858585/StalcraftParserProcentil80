@@ -1,11 +1,9 @@
-using System;
-using System.Collections.Generic;
+
 using System.Data.SQLite;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using System.Text.RegularExpressions;
-using System.Linq;
 
 class Program
 {
@@ -21,6 +19,7 @@ class Program
             // Список предметов, для которых нужно выполнить парсинг
             var itemNames = new List<string>
             {
+                "Премиум на 30 дней",
                 "Нестабильная аномальная батарея",
                 "Камень Жмых-Вжух-Плюх",
                 "Армейский аккумулятор",
@@ -61,11 +60,12 @@ class Program
                 WaitLimitModalActive(driver, wait);
 
                 float minPrice = CatchPrice(driver, wait);
+                WaitLimitModalActive(driver, wait);
 
                 // Парсим сделки, если прошло больше часа с последнего обновления
                 if ((DateTime.Now - lastUpdated).TotalHours >= 1)
                 {
-                    var deals = ParseDealsWithRetry(driver, wait);
+                    var deals = ParseDeals(driver, wait);
                     SaveDataToDeals(deals, item.Url);
                 }
 
@@ -317,7 +317,7 @@ class Program
             return !string.IsNullOrEmpty(element.Text) ? element : null;
         });
 
-        Console.WriteLine("Текст цены: " + сatchPriceElement.Text);
+        Console.WriteLine("Средняя цена: " + сatchPriceElement.Text);
         return ExtractPrice(сatchPriceElement.Text);
     }
 
@@ -337,6 +337,7 @@ class Program
         return 0;
     }
 
+// Кажется лишняя функция. Делала вредную работу
     static List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)> ParseDealsWithRetry(IWebDriver driver, WebDriverWait wait, int retryCount = 3)
     {
         for (int i = 0; i < retryCount; i++)
@@ -358,9 +359,11 @@ class Program
     {
         IWebElement dropdownButton = wait.Until(d => d.FindElement(By.Id("dropdownMenuLinkCountLoadItems")));
         dropdownButton.Click();
+        WaitLimitModalActive(driver, wait);
 
         IWebElement option200 = wait.Until(d => d.FindElement(By.Id("200")));
         option200.Click();
+        WaitLimitModalActive(driver, wait);
 
         IWebElement loadButton = wait.Until(d => d.FindElement(By.XPath("//button[contains(text(), 'Загрузить')]")));
         loadButton.Click();
@@ -374,7 +377,9 @@ class Program
 
         var rows = driver.FindElements(By.CssSelector("#contentHistoryLoots tr"));
         var deals = new List<(DateTime DealDateTime, float Price, int Quantity, int EnchantLevel, string RowColor)>();
-        Console.WriteLine("Найдено строк: " + rows.Count);
+        Console.Write(" Найдено строк: " + rows.Count);
+        Console.WriteLine("");
+        int iRow = 0;
 
         foreach (var row in rows)
         {
@@ -388,24 +393,25 @@ class Program
                 float price = ExtractPrice(priceText);
 
                 // Разделение даты и количества/заточки
-                var (dealDateTime, quantity, enchantLevel) = ParseDateTime(dateTimeText);
+                var (dealDateTime, quantity, enchantLevel) = ExtractDealInfo(dateTimeText);
 
-                Console.WriteLine("Дата: " + dealDateTime + ", Цена: " + price);
+                iRow++;
+                Console.Write("\rДата: " + dealDateTime + ", Цена: " + price + " Строка " + iRow);
                 deals.Add((dealDateTime, price, quantity, enchantLevel, rowColor));
             }
         }
-
+        Console.WriteLine("");
         return deals;
     }
 
-    static (DateTime DealDateTime, int Quantity, int EnchantLevel) ParseDateTime(string dateTimeText)
+    static (DateTime DealDateTime, int Quantity, int EnchantLevel) ExtractDealInfo(string dateTimeText)
     {
         // Регулярное выражение для извлечения даты, времени, количества и заточки
         var match = Regex.Match(dateTimeText, @"(\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2})(?:\s*(x\d+|\+\d+))?");
         if (!match.Success)
         {
             Console.WriteLine($"Не удалось распознать дату: {dateTimeText}");
-            return (new DateTime(1970, 1, 1), 1, 1); // Возвращаем значения по умолчанию
+            return (new DateTime(2025, 1, 1), 1, 1); // Возвращаем значения по умолчанию
         }
 
         // Извлекаем дату и время
@@ -454,7 +460,8 @@ class Program
                     Quantity INTEGER NOT NULL,
                     Price REAL NOT NULL,
                     EnchantLevel INTEGER NOT NULL,
-                    RowColor TEXT NOT NULL
+                    RowColor TEXT NOT NULL,
+                    Name TEXT
                 );";
             using (var command = new SQLiteCommand(createDealsTableQuery, connection))
             {
