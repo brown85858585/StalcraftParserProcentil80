@@ -1,0 +1,18 @@
+SELECT 
+    SUM(CASE WHEN Id IS NULL THEN 1 ELSE 0 END) AS NullIds,
+    SUM(CASE WHEN ItemUrl IS NULL THEN 1 ELSE 0 END) AS NullItemUrls,
+    SUM(CASE WHEN DealDateTime IS NULL THEN 1 ELSE 0 END) AS NullDealDateTimes,
+    SUM(CASE WHEN Quantity IS NULL THEN 1 ELSE 0 END) AS NullQuantities,
+    SUM(CASE WHEN Price IS NULL THEN 1 ELSE 0 END) AS NullPrices,
+    SUM(CASE WHEN EnchantLevel IS NULL THEN 1 ELSE 0 END) AS NullEnchantLevels,
+    SUM(CASE WHEN RowColor IS NULL THEN 1 ELSE 0 END) AS NullRowColors,
+    SUM(CASE WHEN Name IS NULL THEN 1 ELSE 0 END) AS NullNames,
+    COUNT(*) AS TotalRows
+FROM Deals;
+
+SELECT 
+    SUM(CASE WHEN Url IS NULL THEN 1 ELSE 0 END) AS NullUrls,
+    SUM(CASE WHEN MinPrice IS NULL THEN 1 ELSE 0 END) AS NullMinPrices,
+    SUM(CASE WHEN Name IS NULL THEN 1 ELSE 0 END) AS NullNames,
+    COUNT(*) AS TotalRows
+FROM Items;

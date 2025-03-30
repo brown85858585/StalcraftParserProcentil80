@@ -1,6 +1,6 @@
-SELECT COUNT(*) as MinLiquidityCount
-FROM Items
-WHERE Liquidity = (SELECT MIN(Liquidity) FROM Items);
+-- SELECT COUNT(*) as MinLiquidityCount
+-- FROM Items
+-- WHERE Liquidity = (SELECT MIN(Liquidity) FROM Items);
 
 SELECT COUNT(*) as MinMinPriceCount
 FROM Items
@@ -23,4 +23,4 @@ FROM Items;
 
 SELECT *
 FROM Items
-ORDER BY MinPrice DESC;
+ORDER BY Liquidity DESC;
